@@ -1,73 +1,227 @@
-# riscv-ai-accelerator
-Entry-level RTL project exploring AI acceleration through a 5-stage pipelined RISC-V processor integrated with a custom matrix multiplication (MMUL) accelerator.
-
-This project focuses on the intersection of chip architecture and hardware acceleration, demonstrating how digital design can support AI workloads through efficient compute units and memory-mapped integration.
-
-Overview
-
-<img width="600" height="500" alt="image" src="https://github.com/user-attachments/assets/3f354ae2-968f-4cb6-9a0c-4c59eb3476cb" />
+#  RISC-V AI Accelerator  
+### 5-Stage Pipelined RV32I Processor with Matrix Multiplication Unit
 
 
 
+##  Overview
 
-Highlights:-
+This project explores the intersection of *processor design and AI acceleration, implementing a **5-stage pipelined RISC-V (RV32I) CPU* integrated with a *custom matrix multiplication (MMUL) accelerator*.
 
-- 5-stage pipeline: IF, ID, EX, MEM, WB
-- RV32I support: ADDI, ADD, LUI, SW
-- Memory-mapped AI accelerator at "0x00001000"
-- Pipeline stall control using "mmul_busy"
-- Verified using waveform + cycle-level logs
-- Timing closure achieved on FPGA (STA)
+It demonstrates how *hardware-level optimization* can accelerate compute-intensive workloads using a *memory-mapped accelerator architecture*.
 
-**RESULTS**
+---
 
-Pipeline Verification
+##  Architecture
 
-The pipelined execution was verified using waveform analysis and cycle-accurate logs.
+<img width="600" height="500" alt="image" src="https://github.com/user-attachments/assets/3f768f37-2684-4394-9da5-bfbfaa28f8d0" />
 
-- Program Counter (PC) increments correctly by +4 every cycle
-- Instructions propagate across IF → ID → EX → MEM → WB stages
-- ALU outputs observed with expected pipeline latency
 
-Example execution:
 
+---
+
+##  Pipeline Design
+
+<img width="600" height="500" alt="image" src="https://github.com/user-attachments/assets/8e4a9b39-5d95-4c8c-a93c-2b790bc800c1" />
+
+
+
+### Pipeline Stages
+
+| Stage | Function |
+|------|--------|
+| IF   | Instruction Fetch |
+| ID   | Decode + Register Read |
+| EX   | ALU Execution |
+| MEM  | Memory / Accelerator |
+| WB   | Register Writeback |
+
+ Enables instruction-level parallelism  
+ Improves throughput  
+
+---
+
+##  Scgematic Diagram
+
+<img width="600" height="500" alt="image" src="https://github.com/user-attachments/assets/06f9dbac-19cf-4c20-8555-8e95fb34c1a3" />
+
+
+
+###  Memory Mapping
+
+
+BASE ADDRESS: 0x00001000
+
+
+###  Trigger Sequence
+
+assembly
+lui   x1, 0x1
+addi  x2, x0, 1
+sw    x2, 0(x1)
+
+
+###  Execution Flow
+
+
+CPU → Store → MMUL Triggered
+        ↓
+mmul_busy = 1 → Pipeline Stall
+        ↓
+Matrix Multiplication
+        ↓
+mmul_done = 1 → CPU Resume
+
+
+---
+
+##  Key Highlights
+
+-  5-stage pipelined RISC-V CPU (RV32I)
+-  Modular RTL design
+-  Custom AI accelerator (Matrix Multiply)
+-  Memory-mapped CPU–accelerator interface
+-  Stall control using mmul_busy
+-  Waveform + cycle-level verification
+-  Timing closure achieved (STA clean)
+
+---
+
+##  Results & Verification
+
+###  Pipeline Execution
+
+- PC increments correctly:
+  
+  PC = PC + 4
+  
+
+- Instruction flow verified:
+  
+  IF → ID → EX → MEM → WB
+  
+
+- ALU outputs appear with correct latency
+
+---
+
+###  Functional Verification
+
+assembly
 addi x1, x0, 5
 addi x2, x0, 10
 add  x3, x1, x2
 
-Final register values:
+
+*Output:*
 
 x1 = 5
 x2 = 10
 x3 = 15
 
 
-Hazard Demonstration
+ Correct ALU + writeback behavior  
 
-- RAW hazards observed in dependent instructions
-- Resolved using NOP insertion (manual scheduling)
-- Confirms correct pipeline timing behavior in absence of forwarding
+---
 
+###  Hazard Demonstration
 
-AI Accelerator Verification
-
-- Accelerator triggered via memory-mapped store instruction:
-
-sw x2, 0(x1)   // x1 = 0x00001000
-
-Observed behavior:
-
-- "mmul_busy = 1" → pipeline stalls
-- Matrix multiplication executed internally
-- "mmul_done = 1" → CPU resumes execution
+*RAW Hazard:*
+assembly
+add x3, x1, x2
 
 
-Static Timing Analysis (STA)
+*Solution used:*
+assembly
+nop
 
-- Worst Negative Slack (WNS): +0.785 ns
-- No timing violations
-- Estimated maximum frequency (Fmax): ~450 MHz
 
-All timing constraints successfully met on Artix-7 FPGA.
+Demonstrates pipeline timing awareness  
+
+---
+
+###  AI Accelerator Verification
+
+Trigger:
+assembly
+sw x2, 0(x1)
+
+
+Observed:
+
+mmul_busy = 1 → CPU stalls
+mmul_done = 1 → CPU resumes
+
+
+ Correct CPU–accelerator interaction  
+
+---
+
+###  Matrix Multiplication Output
+
+
+Matrix A: [...]
+Matrix B: [...]
+Matrix C: A × B
+
+STATUS: PASS
+
+Succesfully multiplied a 8X8 matrix, and verified the outputs.
+
+
+---
+
+###  Static Timing Analysis (STA)
+
+| Metric | Value |
+|------|------|
+| WNS | +0.785 ns |
+| Violations | 0 |
+| Status | PASSED |
+
+*Estimated Frequency:*
+
+~400–450 MHz
+
+
+---
+
+##  Limitations
+
+- No forwarding unit  
+- No hazard detection logic  
+- Requires NOP insertion  
+- Blocking accelerator execution  
+
+---
+
+##  Future Work
+
+- Forwarding unit  
+- Hazard detection  
+- Parallel MAC units  
+- DMA support  
+- Interrupt-based completion  
+- AXI / SoC integration  
+
+---
+
+##  Tools & Platform
+
+- Verilog  
+- Xilinx Vivado  
+- Artix-7 FPGA (xc7a200t)  
+
+---
+
+##  Author
+
+*Sandesh*  
+EEE Student | Aspiring RTL / VLSI Engineer  
+
+---
+
+##  Note
+
+This project marks a strong foundation in *RTL design, processor architecture, and AI hardware acceleration*.
 
 
