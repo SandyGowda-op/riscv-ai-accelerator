@@ -78,6 +78,7 @@ mmul_done = 1 → CPU Resume
 
 -  5-stage pipelined RISC-V CPU (RV32I)
 -  Modular RTL design
+-  Used assembly level code execution to show the real time usage of the CPU
 -  Custom AI accelerator (Matrix Multiply)
 -  Memory-mapped CPU–accelerator interface
 -  Stall control using mmul_busy
