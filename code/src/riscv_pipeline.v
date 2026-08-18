@@ -12,23 +12,48 @@ module riscv_pipeline (
     output wire [31:0] dbg_r1,
     output wire [31:0] dbg_r2,
     output wire [31:0] dbg_r3,
+    output wire [31:0] dbg_r4,
+    output wire [31:0] dbg_r5,
+    output wire [31:0] dbg_r6,
+    output wire [31:0] dbg_r7,
+    output wire [31:0] dbg_r8,
+    output wire [31:0] dbg_r9,
     output wire        dbg_accel_busy
 );
+    // ============================================================
+    // Global datapath signals
+    // ============================================================
+
+    wire [31:0] exmem_alu;
+    wire [4:0]  exmem_rd;
+    wire        exmem_reg_write;
+    wire        exmem_mem_read;
+    wire [31:0] dmem_rdata;
+
+    wire [4:0]  memwb_rd;
+    wire        memwb_reg_write;
+    wire mmul_result_valid;
+    wire [31:0] branch_rs1_val; //BEQ CONTROL SIGNALS
+    wire [31:0] branch_rs2_val; //BEQ CONTROL SIGNALS
+    // ============================================================
+    // HAZARD DETECTION WIRES
+    // ============================================================
+    wire pc_write;
+    wire ifid_write;
+    wire idex_flush;
 
     // ============================================================
-    // PC (STALL PATCH APPLIED)
+    // MMIO HAZARD DETECTION WIRES
+    // ============================================================
+    wire final_pc_write;
+    wire final_ifid_write;
+    wire final_idex_flush;
+
+    // ============================================================
+    // PC wires instantiation
     // ============================================================
     reg [31:0] pc_reg;
-    wire cpu_stall = dbg_accel_busy;
-
-    always @(posedge clk or posedge rst) begin
-        if (rst)
-            pc_reg <= 32'd0;
-        else if (!cpu_stall)
-            pc_reg <= pc_reg + 32'd4;
-    end
-
-    assign dbg_pc = pc_reg;
+    wire cpu_stall = 1'b0; //STALLING FOR HAZARD DETECTION
 
     // ============================================================
     // IF stage
@@ -42,12 +67,13 @@ module riscv_pipeline (
 
     wire [31:0] ifid_pc_out;
     wire [31:0] ifid_instr_out;
+    wire ifid_flush; //FLUSH SIGNAL FOR BEQ
 
     if_id if_id_inst (
         .clk(clk),
         .rst(rst),
-        .enable(!cpu_stall),   // 🔒 STALL HERE
-        .flush(1'b0),
+        .enable(final_ifid_write),   // 🔒 STALL HERE
+        .flush(ifid_flush),
         .pc_in(pc_reg),
         .instr_in(instr_fetched),
         .pc_out(ifid_pc_out),
@@ -83,8 +109,12 @@ module riscv_pipeline (
         .dbg_r1(dbg_r1),
         .dbg_r2(dbg_r2),
         .dbg_r3(dbg_r3),
-        .dbg_r4(),
-        .dbg_r5()
+        .dbg_r4(dbg_r4),
+        .dbg_r5(dbg_r5),
+        .dbg_r6(dbg_r6),
+        .dbg_r7(dbg_r7),
+        .dbg_r8(dbg_r8),
+        .dbg_r9(dbg_r9)
     );
 
     // ============================================================
@@ -108,11 +138,113 @@ module riscv_pipeline (
 
     wire id_mem_to_reg = (id_opcode == 7'b0000011);
     wire id_alu_src    = (id_opcode != 7'b0110011);
+    wire id_branch = (id_opcode == 7'b1100011); //BEQ BRANCHING ADDED
+
+    // ============================================================
+    // MMUL CONTROL SIGNALS
+    // ============================================================
+    wire [31:0] mmul_read_addr;
+    wire reading_mmul_result;
+    wire accel_raw_hazard;
+
+    assign mmul_read_addr =
+    branch_rs1_val + id_imm;
+
+    assign reading_mmul_result =
+    id_mem_read &&
+    (mmul_read_addr == 32'h00001008);
+
+    assign accel_raw_hazard =
+    reading_mmul_result &&
+    !mmul_result_valid;
+
+    always @(*) begin
+    if (accel_raw_hazard)
+        $display("ACCEL RAW HAZARD DETECTED");
+    end
+
+    // ============================================================
+    // BEQ CONTROL SIGNALS
+    // ============================================================
+    assign branch_rs1_val =
+
+    (exmem_mem_read &&
+    (exmem_rd != 0) &&
+    (exmem_rd == id_rs1))
+    ? dmem_rdata :
+
+    (exmem_reg_write &&
+     (exmem_rd != 0) &&
+     (exmem_rd == id_rs1))
+        ? exmem_alu :
+
+    (memwb_reg_write &&
+     (memwb_rd != 0) &&
+     (memwb_rd == id_rs1))
+        ? wb_data :
+
+    rf_rs1_data;
+
+    assign branch_rs2_val =
+
+    (exmem_mem_read &&
+    (exmem_rd != 0) &&
+    (exmem_rd == id_rs2))
+    ? dmem_rdata :
+
+    (exmem_reg_write &&
+     (exmem_rd != 0) &&
+     (exmem_rd == id_rs2))
+        ? exmem_alu :
+
+    (memwb_reg_write &&
+     (memwb_rd != 0) &&
+     (memwb_rd == id_rs2))
+        ? wb_data :
+
+    rf_rs2_data;
+    wire branch_taken =
+    id_branch && pc_write &&
+    (branch_rs1_val == branch_rs2_val);
+    wire [31:0] branch_target = //COMPUTE SIGNAL FOR BRANCH TARGET
+    ifid_pc_out + id_imm;
+    assign ifid_flush = //FLUSH SIGNAL FOR BEQ
+    branch_taken && pc_write;
+
+    always @(*) begin
+    if (id_branch)
+        $display(
+            "BRANCH: pc_write=%b rs1=%h rs2=%h taken=%b",
+            pc_write,
+            branch_rs1_val,
+            branch_rs2_val,
+            branch_taken
+        );
+    end
+
+    always @(*) begin
+    if (id_opcode == 7'b1100011)
+        $display(
+            "BEQ_DEBUG PC=%h IMM=%h TARGET=%h",
+            ifid_pc_out,
+            id_imm,
+            branch_target
+        );
+    end
+    
+
+    // ============================================================
+    // FORWARDING WIRES (INSTANTIATION AT END)
+    // ============================================================
+    wire [1:0] forward_a;
+    wire [1:0] forward_b;
 
     // ============================================================
     // ID / EX
     // ============================================================
     wire [31:0] idex_rs1, idex_rs2, idex_imm;
+    wire [4:0]  idex_rs1_addr;
+    wire [4:0]  idex_rs2_addr;
     wire [4:0]  idex_rd;
     wire [6:0]  idex_opcode;
     wire        idex_mem_read, idex_mem_write, idex_mem_to_reg, idex_reg_write, idex_alu_src;
@@ -120,7 +252,7 @@ module riscv_pipeline (
     id_ex id_ex_inst (
         .clk(clk),
         .rst(rst),
-        .flush(1'b0),
+        .flush(final_idex_flush),
 
         .pc_in(ifid_pc_out),
         .rs1_data_in(rf_rs1_data),
@@ -141,8 +273,8 @@ module riscv_pipeline (
         .rs1_out(idex_rs1),
         .rs2_out(idex_rs2),
         .imm_out(idex_imm),
-        .rs1_addr_out(),
-        .rs2_addr_out(),
+        .rs1_addr_out(idex_rs1_addr),
+        .rs2_addr_out(idex_rs2_addr),
         .rd_out(idex_rd),
         .opcode_out(idex_opcode),
 
@@ -153,24 +285,46 @@ module riscv_pipeline (
         .reg_write_out(idex_reg_write)
     );
 
+    wire [31:0] forwarded_rs1; //FORWARDED REGISTER VALUES
+    wire [31:0] forwarded_rs2;
     // ============================================================
-    // EX stage (LUI FIX PRESERVED)
+    // EX stage (LUI FIX PRESERVED)(FORWARDING DONE)
     // ============================================================
-    wire [31:0] alu_b = idex_alu_src ? idex_imm : idex_rs2;
+    assign forwarded_rs1 =
+    (forward_a == 2'b10) ? exmem_alu :
+    (forward_a == 2'b01) ? wb_data   :
+                           idex_rs1;
+
+    assign forwarded_rs2 =
+    (forward_b == 2'b10) ? exmem_alu :
+    (forward_b == 2'b01) ? wb_data   :
+                           idex_rs2;
+
+    wire [31:0] alu_b = idex_alu_src ? idex_imm : forwarded_rs2;
 
     wire [31:0] alu_result_ex =
         (idex_opcode == 7'b0110111) ? idex_imm :
-                                      (idex_rs1 + alu_b);
+                                      (forwarded_rs1 + alu_b);
 
     assign dbg_alu = alu_result_ex;
+
+    always @(*) begin
+    if (idex_mem_read)
+        $display(
+            "LOAD_EX_DEBUG rs1=%08h imm=%08h alu_b=%08h result=%08h",
+            forwarded_rs1,
+            idex_imm,
+            alu_b,
+            forwarded_rs1 + alu_b
+        );
+    end
 
     // ============================================================
     // EX / MEM
     // ============================================================
-    wire [31:0] exmem_alu;
+    
     wire [31:0] exmem_rs2;
-    wire [4:0]  exmem_rd;
-    wire        exmem_mem_read, exmem_mem_write, exmem_mem_to_reg, exmem_reg_write;
+    wire         exmem_mem_write, exmem_mem_to_reg;
 
     ex_mem ex_mem_inst (
         .clk(clk),
@@ -193,6 +347,12 @@ module riscv_pipeline (
         .reg_write_out(exmem_reg_write)
     );
 
+    always @(posedge clk) begin
+    $display("EXMEM_CAPTURE alu_result_ex=%08h exmem_alu=%08h",
+             alu_result_ex,
+             exmem_alu);
+    end
+
     // ============================================================
     // MEM stage + MMUL
     // ============================================================
@@ -201,7 +361,6 @@ module riscv_pipeline (
     wire mmul_sel = (exmem_alu >= MMUL_BASE) &&
                     (exmem_alu <  MMUL_BASE + 32'h100);
 
-    wire [31:0] dmem_rdata;
     data_memory dmem (
         .clk(clk),
         .mem_read(exmem_mem_read & ~mmul_sel),
@@ -212,19 +371,24 @@ module riscv_pipeline (
     );
 
 
+    wire [31:0] mmul_rdata;
     mmul_mem mmul_inst (
         .clk(clk),
         .rst(rst),
         .addr(exmem_alu),
         .wdata(exmem_rs2),
+        .mmul_result_valid(mmul_result_valid),
         .we(exmem_mem_write & mmul_sel),
         .mmul_busy(mmul_busy),
-        .mmul_done(mmul_done)
+        .mmul_done(mmul_done),
+        .rdata(mmul_rdata)
     );
 
     assign dbg_accel_busy = mmul_busy;
 
-    wire [31:0] mem_rdata = dmem_rdata;
+    wire [31:0] mem_rdata =
+    mmul_sel ? mmul_rdata :
+               dmem_rdata;
     assign dbg_dmem_load = mem_rdata;
 
     // ============================================================
@@ -232,8 +396,7 @@ module riscv_pipeline (
     // ============================================================
     wire [31:0] memwb_mem;
     wire [31:0] memwb_alu;
-    wire [4:0]  memwb_rd;
-    wire        memwb_mem_to_reg, memwb_reg_write;
+    wire        memwb_mem_to_reg;
 
     mem_wb mem_wb_inst (
         .clk(clk),
@@ -256,5 +419,72 @@ module riscv_pipeline (
     assign wb_we   = memwb_reg_write;
     assign wb_rd   = memwb_rd;
     assign wb_data = memwb_mem_to_reg ? memwb_mem : memwb_alu;
+
+    // ============================================================
+    // FORWARDING STAGE
+    // ============================================================  
+
+    forwarding_unit forwarding_unit_inst (
+
+    .idex_rs1(idex_rs1_addr),
+    .idex_rs2(idex_rs2_addr),
+
+    .exmem_rd(exmem_rd),
+    .exmem_reg_write(exmem_reg_write),
+
+    .memwb_rd(memwb_rd),
+    .memwb_reg_write(memwb_reg_write),
+
+    .forward_a(forward_a),
+    .forward_b(forward_b)
+
+    );
+
+    // ============================================================
+    // HAZARD DETECTION (STALLING FOR LOAD-USE HAZARD)
+    // ============================================================  
+    hazard_detection_unit hazard_unit (
+
+    .ifid_rs1(id_rs1),
+    .ifid_rs2(id_rs2),
+
+    .idex_rd(idex_rd),
+    .idex_mem_read(idex_mem_read),
+
+    .pc_write(pc_write),
+    .ifid_write(ifid_write),
+    .idex_flush(idex_flush)
+
+    );
+    // ============================================================
+    // PC WORKING SHIFTED FOR SYNTAX PURPOSES
+    // ============================================================  
+    always @(posedge clk or posedge rst) begin
+    if (rst)
+        pc_reg <= 32'd0;
+
+    else if (final_pc_write) begin
+
+        if (branch_taken)
+            pc_reg <= branch_target;
+        else
+            pc_reg <= pc_reg + 32'd4;
+
+    end
+end
+
+    assign dbg_pc = pc_reg;
+
+    // ============================================================
+    // MMIO HAZARD DETECTION LOGIC
+    // ============================================================
+    assign final_pc_write =
+    pc_write & ~accel_raw_hazard;
+
+    assign final_ifid_write =
+    ifid_write & ~accel_raw_hazard;
+
+    assign final_idex_flush =
+    idex_flush | accel_raw_hazard;
 
 endmodule
