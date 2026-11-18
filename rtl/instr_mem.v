@@ -1,0 +1,19 @@
+module instr_mem (
+    input  wire [31:0] addr,
+    output wire [31:0] instr
+);
+
+    reg [31:0] mem [0:1023];
+
+   `ifndef SYNTHESIS
+initial begin
+    $display("instr_mem: attempting to load instruction_memory.mem...");
+    $readmemh("mem files/instruction_memory.mem", mem);
+    $display("instr_mem: load complete.");
+end
+`endif
+
+    // ✅ CRITICAL FIX
+    assign instr = mem[addr[31:2]];
+
+endmodule

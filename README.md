@@ -1,228 +1,102 @@
-#  RISC-V AI Accelerator  
-### 5-Stage Pipelined RV32I Processor with Matrix Multiplication Unit
-
-
-
-##  Overview
-
-This project explores the intersection of *processor design and AI acceleration, implementing a **5-stage pipelined RISC-V (RV32I) CPU* integrated with a *custom matrix multiplication (MMUL) accelerator*.
-
-It demonstrates how *hardware-level optimization* can accelerate compute-intensive workloads using a *memory-mapped accelerator architecture*.
-
----
-
-##  Architecture
-
-<img width="600" height="500" alt="image" src="https://github.com/user-attachments/assets/3f768f37-2684-4394-9da5-bfbfaa28f8d0" />
-
-
-
----
-
-##  Pipeline Design
-
-<img width="600" height="500" alt="image" src="https://github.com/user-attachments/assets/8e4a9b39-5d95-4c8c-a93c-2b790bc800c1" />
-
-
-
-### Pipeline Stages
-
-| Stage | Function |
-|------|--------|
-| IF   | Instruction Fetch |
-| ID   | Decode + Register Read |
-| EX   | ALU Execution |
-| MEM  | Memory / Accelerator |
-| WB   | Register Writeback |
-
- Enables instruction-level parallelism  
- Improves throughput  
-
----
-
-##  Scgematic Diagram
-
-<img width="600" height="500" alt="image" src="https://github.com/user-attachments/assets/06f9dbac-19cf-4c20-8555-8e95fb34c1a3" />
-
-
-
-###  Memory Mapping
-
-
-BASE ADDRESS: 0x00001000
-
-
-###  Trigger Sequence
-
-assembly
-lui   x1, 0x1
-addi  x2, x0, 1
-sw    x2, 0(x1)
-
-
-###  Execution Flow
-
-
-CPU → Store → MMUL Triggered
-        ↓
-mmul_busy = 1 → Pipeline Stall
-        ↓
-Matrix Multiplication
-        ↓
-mmul_done = 1 → CPU Resume
-
-
----
-
-##  Key Highlights
-
--  5-stage pipelined RISC-V CPU (RV32I)
--  Modular RTL design
--  Used assembly level code execution to show the real time usage of the CPU
--  Custom AI accelerator (Matrix Multiply)
--  Memory-mapped CPU–accelerator interface
--  Stall control using mmul_busy
--  Waveform + cycle-level verification
--  Timing closure achieved (STA clean)
-
----
-
-##  Results & Verification
-
-###  Pipeline Execution
-
-- PC increments correctly:
-  
-  PC = PC + 4
-  
-
-- Instruction flow verified:
-  
-  IF → ID → EX → MEM → WB
-  
-
-- ALU outputs appear with correct latency
-
----
-
-###  Functional Verification
-
-assembly
-addi x1, x0, 5
-addi x2, x0, 10
-add  x3, x1, x2
-
-
-*Output:*
-
-x1 = 5
-x2 = 10
-x3 = 15
-
-
- Correct ALU + writeback behavior  
-
----
-
-###  Hazard Demonstration
-
-*RAW Hazard:*
-assembly
-add x3, x1, x2
-
-
-*Solution used:*
-assembly
-nop
-
-
-Demonstrates pipeline timing awareness  
-
----
-
-###  AI Accelerator Verification
-
-Trigger:
-assembly
-sw x2, 0(x1)
-
-
-Observed:
-
-mmul_busy = 1 → CPU stalls
-mmul_done = 1 → CPU resumes
-
-
- Correct CPU–accelerator interaction  
-
----
-
-###  Matrix Multiplication Output
-
-
-Matrix A: [...]
-Matrix B: [...]
-Matrix C: A × B
-
-STATUS: PASS
-
-Succesfully multiplied a 8X8 matrix, and verified the outputs.
-
-
----
-
-###  Static Timing Analysis (STA)
-
-| Metric | Value |
-|------|------|
-| WNS | +0.785 ns |
-| Violations | 0 |
-| Status | PASSED |
-
-*Estimated Frequency:*
-
-~400–450 MHz
-
-
----
-
-##  Limitations
-
-- No forwarding unit  
-- No hazard detection logic  
-- Requires NOP insertion  
-- Blocking accelerator execution  
-
----
-
-##  Future Work
-
-- Forwarding unit  
-- Hazard detection  
-- Parallel MAC units  
-- DMA support  
-- Interrupt-based completion  
-- AXI / SoC integration  
-
----
-
-##  Tools & Platform
-
-- Verilog  
-- Xilinx Vivado  
-- Artix-7 FPGA (xc7a200t)  
-
----
-
-##  Author
-
-*Sandesh*  
-EEE Student | Aspiring RTL / VLSI Engineer  
-
----
-
-##  Note
-
-This project marks a strong foundation in *RTL design, processor architecture, and AI hardware acceleration*.
-
-
+# RV32I 5-Stage Pipeline with a Coprocessor Interface (v2)
+
+[![regression](https://github.com/SandyGowda-op/riscv-ai-accelerator/actions/workflows/regression.yml/badge.svg)](https://github.com/SandyGowda-op/riscv-ai-accelerator/actions/workflows/regression.yml)
+
+A 5-stage in-order RISC-V pipeline (IF, ID, EX, MEM, WB) with full forwarding,
+hazard detection and a custom-0 instruction interface for driving a
+matrix accelerator. Every hazard fix has a directed test, and the key ones
+have a **negative control**: the same test recompiled with the fix removed,
+which must fail.
+
+This is the CPU half of [NeuroCore](https://github.com/SandyGowda-op/neurocore).
+Here the accelerator is replaced by a small behavioural model so the CPU can
+be built and verified on its own.
+
+> **v1 vs v2.** `v1.0-mmio` (tag) is the original design: no forwarding,
+> NOPs inserted by hand, accelerator started by a store to address 0x1000.
+> v2 (this branch) adds forwarding, hazard detection, a register-file bypass
+> and custom instructions with hardware interlocks.
+
+## Instruction set
+
+| Group | Instructions |
+|---|---|
+| RV32I subset | `ADD`, `ADDI`, `LUI`, `LW`, `SW`, `BEQ` |
+| custom-0 (opcode `0x0B`) | `FMAC_START` (funct3 0), `RELU` (1), `FMAC_READ` (2), `FMAC_SETDESC` (3) |
+
+`FMAC_READ rd, rs1`: `rs1[5:0]` = result element, `rs1[6]` = read status
+`{busy, error}`, `rs1[7]` = read the high 32 bits of the 64-bit result.
+There is no hardware multiply, and no `SUB`/`SLT`/shift instructions yet.
+
+## Pipeline
+
+```
+ IF ──► ID ──────────────► EX ──────► MEM ──────► WB
+        │ branch resolve   │ ALU,       │ data mem,   │ write-back
+        │ (BEQ in ID)      │ custom ops │ descriptor  │ (write-through
+        │ hazard unit      │            │ window      │  to ID reads)
+        └─ forwarding: EX/MEM, MEM/WB ─► EX and ─► ID (branch compare)
+```
+
+## Hazards handled, and how each is tested
+
+| Hazard | Fix | Test | Negative control |
+|---|---|---|---|
+| ALU result used by the `BEQ` right behind it (branch resolves in ID) | 1-cycle stall | T2 | – |
+| `FMAC_READ` result used by the `BEQ` right behind it | 1-cycle stall | T3 | – |
+| Value written back 3 instructions earlier read stale from the register file | write-through bypass | T7 | `-DNO_RF_BYPASS` fails T7 |
+| Second `FMAC_START` while a job runs (would be silently dropped) | stall `START` while busy | T1, H7 | – |
+| `FMAC_READ` before the job finishes, or right behind a new `START` | stall until done | H1, H2 | – |
+| Invalid descriptor must not hang, and error must be visible | status read via `rs1[6]` | T4 | – |
+| Load-use | 1-cycle stall | system program | – |
+
+## Results
+
+Run in a clean checkout; passes on Icarus Verilog 12.0 and 14.0 (devel) (`sh scripts/run_all.sh`):
+
+```
+T1 hazard_directed_tb                                ok (PASS)
+T2 hazard_directed_tb                                ok (PASS)
+T3 hazard_directed_tb                                ok (PASS)
+T4 hazard_directed_tb                                ok (PASS)
+T7 distance-3 RAW (register-file bypass)             ok (PASS)
+  neg. control: -DNO_RF_BYPASS                       ok (FAIL)
+riscv_pipeline_tb H1-H9 (system program)             ok (PASS)
+checks as expected: 7   mismatches: 0
+```
+
+These are directed tests plus negative controls, not a formal proof.
+The accelerator model has a fixed 300-cycle latency, so cycle counts here say
+nothing about real accelerator performance (see NeuroCore for that).
+
+## Run it
+
+```sh
+sh scripts/run_all.sh                    # needs iverilog >= 12 and python3
+DEFS="-DNC_TRACE" sh scripts/run_all.sh  # same, with per-cycle debug prints
+```
+
+Logs land in `build/`.
+
+## Layout
+
+```
+rtl/                     pipeline RTL (riscv_pipeline.v is the top)
+verification/tb/         hazard_directed_tb (T1-T4), rawd3_tb (T7), riscv_pipeline_tb (H1-H9)
+verification/models/     accel_model.sv: behavioural stand-in for the accelerator
+scripts/                 run_all.sh, program generators (gen_progs.py, gen_t7_prog.py)
+mem files/               program and data images
+legacy/                  unused v1 modules (alu.v, alu_control.v)
+```
+
+## Known limits
+
+- Instruction subset only (no `SUB`, `SLT`, shifts, `JAL`, other branches).
+- Memories load their contents with `$readmemh` in simulation only; a real
+  build needs ROM/BRAM initialisation.
+- `mmul_mem.v` (the v1 memory-mapped multiplier at 0x1000) is still wired in
+  for backward compatibility.
+
+## License
+
+MIT
